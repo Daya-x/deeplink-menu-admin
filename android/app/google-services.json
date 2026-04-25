@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "147456343708",
+    "project_id": "deeplink-menu",
+    "storage_bucket": "deeplink-menu.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:147456343708:android:053aaffe1bcb3aacc8b759",
+        "android_client_info": {
+          "package_name": "com.example.deeplink_menu_admin"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA9-pi3BdkUJzy1yfyXn4PWJopBxM7Fpig"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
