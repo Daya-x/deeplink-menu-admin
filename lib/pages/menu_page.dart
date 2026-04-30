@@ -27,7 +27,41 @@ class _MenuPageState extends State<MenuPage> {
   String selectedCategory = '';
   Uint8List? selectedImage;
 
-  String get uid => FirebaseAuth.instance.currentUser!.uid;
+  String get uid => FirebaseAuth.instance.currentUser?.uid ?? '';
+
+  String? get currentUid => FirebaseAuth.instance.currentUser?.uid;
+
+  @override
+  void dispose() {
+    categoryController.dispose();
+    nameController.dispose();
+    descController.dispose();
+    priceController.dispose();
+    normalController.dispose();
+    fullController.dispose();
+    super.dispose();
+  }
+
+  void showMessage(String message, {bool success = false}) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: success ? const Color(0xFF00D1FF) : Colors.redAccent,
+        content: Text(
+          message,
+          style: TextStyle(
+            color: success ? Colors.black : Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+
+  bool isValidPrice(String value) {
+    final price = double.tryParse(value.trim());
+    return price != null && price >= 0;
+  }
 
   final inputBorder = OutlineInputBorder(
     borderRadius: BorderRadius.circular(18),
@@ -50,12 +84,16 @@ class _MenuPageState extends State<MenuPage> {
   }
 
   Future<void> pickImage() async {
-    final picker = ImagePicker();
-    final file = await picker.pickImage(source: ImageSource.gallery);
+    try {
+      final picker = ImagePicker();
+      final file = await picker.pickImage(source: ImageSource.gallery);
 
-    if (file != null) {
-      selectedImage = await file.readAsBytes();
-      setState(() {});
+      if (file != null) {
+        selectedImage = await file.readAsBytes();
+        if (mounted) setState(() {});
+      }
+    } catch (e) {
+      showMessage('Failed to pick image. Please try again.');
     }
   }
 
@@ -77,74 +115,211 @@ class _MenuPageState extends State<MenuPage> {
 
     final res = await req.send();
     final data = await res.stream.bytesToString();
+    final decoded = jsonDecode(data);
 
-    return jsonDecode(data)['secure_url'];
+    if (res.statusCode != 200 && res.statusCode != 201) {
+      throw Exception(decoded['error']?['message'] ?? 'Image upload failed');
+    }
+
+    final secureUrl = decoded['secure_url'];
+
+    if (secureUrl == null || secureUrl.toString().isEmpty) {
+      throw Exception('Image upload failed. No image URL returned.');
+    }
+
+    return secureUrl.toString();
   }
 
   Future<void> addCategory() async {
-    if (categoryController.text.trim().isEmpty) return;
+    final uid = currentUid;
+    final categoryName = categoryController.text.trim();
 
-    await FirebaseFirestore.instance
-        .collection('businesses')
-        .doc(uid)
-        .collection('categories')
-        .add({
-      'name': categoryController.text.trim(),
-      'createdAt': FieldValue.serverTimestamp(),
-    });
+    if (uid == null) {
+      showMessage('Session expired. Please login again.');
+      return;
+    }
 
-    categoryController.clear();
+    if (categoryName.isEmpty) {
+      showMessage('Enter a category name.');
+      return;
+    }
+
+    try {
+      final existing = await FirebaseFirestore.instance
+          .collection('businesses')
+          .doc(uid)
+          .collection('categories')
+          .where('nameLower', isEqualTo: categoryName.toLowerCase())
+          .limit(1)
+          .get();
+
+      if (existing.docs.isNotEmpty) {
+        showMessage('This category already exists.');
+        return;
+      }
+
+      await FirebaseFirestore.instance
+          .collection('businesses')
+          .doc(uid)
+          .collection('categories')
+          .add({
+        'name': categoryName,
+        'nameLower': categoryName.toLowerCase(),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      categoryController.clear();
+
+      showMessage('Category added.', success: true);
+    } catch (e) {
+      showMessage('Failed to add category. Please try again.');
+    }
   }
 
   Future<void> addItem() async {
-    if (nameController.text.trim().isEmpty) return;
-    if (selectedCategory.isEmpty) return;
+    final uid = currentUid;
+
+    if (uid == null) {
+      showMessage('Session expired. Please login again.');
+      return;
+    }
+
+    final name = nameController.text.trim();
+    final description = descController.text.trim();
+    final price = priceController.text.trim();
+    final normalPrice = normalController.text.trim();
+    final fullPrice = fullController.text.trim();
+
+    if (name.isEmpty) {
+      showMessage('Enter item name.');
+      return;
+    }
+
+    if (selectedCategory.isEmpty) {
+      showMessage('Select a category first.');
+      return;
+    }
+
+    if (!hasSizes && !isValidPrice(price)) {
+      showMessage('Enter a valid price.');
+      return;
+    }
+
+    if (hasSizes) {
+      if (!isValidPrice(normalPrice)) {
+        showMessage('Enter a valid normal price.');
+        return;
+      }
+
+      if (!isValidPrice(fullPrice)) {
+        showMessage('Enter a valid full price.');
+        return;
+      }
+    }
 
     setState(() => uploading = true);
 
-    String imageUrl = '';
+    try {
+      String imageUrl = '';
 
-    if (selectedImage != null) {
-      imageUrl = await uploadImage(selectedImage!);
+      if (selectedImage != null) {
+        imageUrl = await uploadImage(selectedImage!);
+      }
+
+      await FirebaseFirestore.instance
+          .collection('businesses')
+          .doc(uid)
+          .collection('menuItems')
+          .add({
+        'image': imageUrl,
+        'category': selectedCategory,
+        'name': name,
+        'description': description,
+        'hasSizeOptions': hasSizes,
+        'price': hasSizes ? '' : price,
+        'normalPrice': hasSizes ? normalPrice : '',
+        'fullPrice': hasSizes ? fullPrice : '',
+        'isAvailable': true,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      nameController.clear();
+      descController.clear();
+      priceController.clear();
+      normalController.clear();
+      fullController.clear();
+
+      setState(() {
+        selectedImage = null;
+        hasSizes = false;
+      });
+
+      showMessage('Menu item added.', success: true);
+    } catch (e) {
+      showMessage('Failed to add menu item. Please try again.');
+    } finally {
+      if (mounted) {
+        setState(() => uploading = false);
+      }
     }
-
-    await FirebaseFirestore.instance
-        .collection('businesses')
-        .doc(uid)
-        .collection('menuItems')
-        .add({
-      'image': imageUrl,
-      'category': selectedCategory,
-      'name': nameController.text.trim(),
-      'description': descController.text.trim(),
-      'hasSizeOptions': hasSizes,
-      'price': hasSizes ? '' : priceController.text.trim(),
-      'normalPrice': hasSizes ? normalController.text.trim() : '',
-      'fullPrice': hasSizes ? fullController.text.trim() : '',
-      'isAvailable': true,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-
-    nameController.clear();
-    descController.clear();
-    priceController.clear();
-    normalController.clear();
-    fullController.clear();
-
-    setState(() {
-      selectedImage = null;
-      uploading = false;
-      hasSizes = false;
-    });
   }
 
   Future<void> deleteItem(String id) async {
-    await FirebaseFirestore.instance
-        .collection('businesses')
-        .doc(uid)
-        .collection('menuItems')
-        .doc(id)
-        .delete();
+    final uid = currentUid;
+
+    if (uid == null) {
+      showMessage('Session expired. Please login again.');
+      return;
+    }
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF0B101B),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+          ),
+          title: const Text(
+            'Delete Item',
+            style: TextStyle(color: Colors.white),
+          ),
+          content: const Text(
+            'Are you sure you want to delete this menu item?',
+            style: TextStyle(color: Color(0xFF9FB3C8)),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.redAccent,
+              ),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirm != true) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('businesses')
+          .doc(uid)
+          .collection('menuItems')
+          .doc(id)
+          .delete();
+
+      showMessage('Menu item deleted.', success: true);
+    } catch (e) {
+      showMessage('Failed to delete item. Please try again.');
+    }
   }
 
   Widget neonSwitch({
@@ -182,6 +357,7 @@ class _MenuPageState extends State<MenuPage> {
 
     bool editHasSizes = item['hasSizeOptions'] ?? false;
     bool editAvailable = item['isAvailable'] ?? true;
+    bool editSaving = false;
     Uint8List? editImage;
 
     await showDialog(
@@ -189,6 +365,83 @@ class _MenuPageState extends State<MenuPage> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
+            Future<void> updateItem() async {
+              final uid = currentUid;
+
+              if (uid == null) {
+                showMessage('Session expired. Please login again.');
+                return;
+              }
+
+              final name = editName.text.trim();
+              final description = editDesc.text.trim();
+              final price = editPrice.text.trim();
+              final normalPrice = editNormal.text.trim();
+              final fullPrice = editFull.text.trim();
+
+              if (name.isEmpty) {
+                showMessage('Enter item name.');
+                return;
+              }
+
+              if (!editHasSizes && !isValidPrice(price)) {
+                showMessage('Enter a valid price.');
+                return;
+              }
+
+              if (editHasSizes) {
+                if (!isValidPrice(normalPrice)) {
+                  showMessage('Enter a valid normal price.');
+                  return;
+                }
+
+                if (!isValidPrice(fullPrice)) {
+                  showMessage('Enter a valid full price.');
+                  return;
+                }
+              }
+
+              setDialogState(() {
+                editSaving = true;
+              });
+
+              try {
+                String imageUrl = item['image'] ?? '';
+
+                if (editImage != null) {
+                  imageUrl = await uploadImage(editImage!);
+                }
+
+                await FirebaseFirestore.instance
+                    .collection('businesses')
+                    .doc(uid)
+                    .collection('menuItems')
+                    .doc(itemId)
+                    .update({
+                  'image': imageUrl,
+                  'name': name,
+                  'description': description,
+                  'hasSizeOptions': editHasSizes,
+                  'price': editHasSizes ? '' : price,
+                  'normalPrice': editHasSizes ? normalPrice : '',
+                  'fullPrice': editHasSizes ? fullPrice : '',
+                  'isAvailable': editAvailable,
+                  'updatedAt': FieldValue.serverTimestamp(),
+                });
+
+                if (!mounted) return;
+
+                Navigator.pop(context);
+                showMessage('Menu item updated.', success: true);
+              } catch (e) {
+                showMessage('Failed to update item. Please try again.');
+              } finally {
+                setDialogState(() {
+                  editSaving = false;
+                });
+              }
+            }
+
             return Dialog(
               backgroundColor: Colors.transparent,
               child: Container(
@@ -227,9 +480,7 @@ class _MenuPageState extends State<MenuPage> {
                           ),
                         ),
                       ),
-
                       const SizedBox(height: 22),
-
                       if (editImage != null)
                         ClipRRect(
                           borderRadius: BorderRadius.circular(22),
@@ -250,9 +501,7 @@ class _MenuPageState extends State<MenuPage> {
                             fit: BoxFit.cover,
                           ),
                         ),
-
                       const SizedBox(height: 16),
-
                       OutlinedButton.icon(
                         style: OutlinedButton.styleFrom(
                           foregroundColor: const Color(0xFF00D1FF),
@@ -262,87 +511,90 @@ class _MenuPageState extends State<MenuPage> {
                             borderRadius: BorderRadius.circular(18),
                           ),
                         ),
-                        onPressed: () async {
-                          final picker = ImagePicker();
-                          final file = await picker.pickImage(
-                            source: ImageSource.gallery,
-                          );
+                        onPressed: editSaving
+                            ? null
+                            : () async {
+                                try {
+                                  final picker = ImagePicker();
+                                  final file = await picker.pickImage(
+                                    source: ImageSource.gallery,
+                                  );
 
-                          if (file != null) {
-                            final bytes = await file.readAsBytes();
-                            setDialogState(() {
-                              editImage = bytes;
-                            });
-                          }
-                        },
+                                  if (file != null) {
+                                    final bytes = await file.readAsBytes();
+                                    setDialogState(() {
+                                      editImage = bytes;
+                                    });
+                                  }
+                                } catch (e) {
+                                  showMessage(
+                                    'Failed to pick image. Please try again.',
+                                  );
+                                }
+                              },
                         icon: const Icon(Icons.image),
                         label: const Text('Change Image'),
                       ),
-
                       const SizedBox(height: 16),
-
                       TextField(
                         controller: editName,
                         style: const TextStyle(color: Color(0xFFEAF8FF)),
                         decoration: inputDecoration('Item Name'),
                       ),
-
                       const SizedBox(height: 14),
-
                       TextField(
                         controller: editDesc,
                         style: const TextStyle(color: Color(0xFFEAF8FF)),
                         maxLines: 3,
                         decoration: inputDecoration('Description'),
                       ),
-
                       const SizedBox(height: 12),
-
                       neonSwitch(
                         title: 'Normal / Full Prices',
                         value: editHasSizes,
-                        onChanged: (v) {
-                          setDialogState(() {
-                            editHasSizes = v;
-                          });
-                        },
+                        onChanged: editSaving
+                            ? (_) {}
+                            : (v) {
+                                setDialogState(() {
+                                  editHasSizes = v;
+                                });
+                              },
                       ),
-
                       if (!editHasSizes)
                         TextField(
                           controller: editPrice,
+                          keyboardType: TextInputType.number,
                           style: const TextStyle(color: Color(0xFFEAF8FF)),
                           decoration: inputDecoration('Price'),
                         ),
-
                       if (editHasSizes) ...[
                         TextField(
                           controller: editNormal,
+                          keyboardType: TextInputType.number,
                           style: const TextStyle(color: Color(0xFFEAF8FF)),
                           decoration: inputDecoration('Normal Price'),
                         ),
                         const SizedBox(height: 12),
                         TextField(
                           controller: editFull,
+                          keyboardType: TextInputType.number,
                           style: const TextStyle(color: Color(0xFFEAF8FF)),
                           decoration: inputDecoration('Full Price'),
                         ),
                       ],
-
                       const SizedBox(height: 12),
-
                       neonSwitch(
                         title: 'Available',
                         value: editAvailable,
-                        onChanged: (v) {
-                          setDialogState(() {
-                            editAvailable = v;
-                          });
-                        },
+                        onChanged: editSaving
+                            ? (_) {}
+                            : (v) {
+                                setDialogState(() {
+                                  editAvailable = v;
+                                });
+                              },
                       ),
-
                       const SizedBox(height: 20),
-
                       Row(
                         children: [
                           Expanded(
@@ -357,46 +609,17 @@ class _MenuPageState extends State<MenuPage> {
                                   borderRadius: BorderRadius.circular(18),
                                 ),
                               ),
-                              onPressed: () => Navigator.pop(context),
+                              onPressed:
+                                  editSaving ? null : () => Navigator.pop(context),
                               child: const Text('Cancel'),
                             ),
                           ),
                           const SizedBox(width: 12),
                           Expanded(
                             child: _FullGradientButton(
-                              text: 'Update',
+                              text: editSaving ? 'Updating...' : 'Update',
                               icon: Icons.check_rounded,
-                              onTap: () async {
-                                String imageUrl = item['image'] ?? '';
-
-                                if (editImage != null) {
-                                  imageUrl = await uploadImage(editImage!);
-                                }
-
-                                await FirebaseFirestore.instance
-                                    .collection('businesses')
-                                    .doc(uid)
-                                    .collection('menuItems')
-                                    .doc(itemId)
-                                    .update({
-                                  'image': imageUrl,
-                                  'name': editName.text.trim(),
-                                  'description': editDesc.text.trim(),
-                                  'hasSizeOptions': editHasSizes,
-                                  'price': editHasSizes
-                                      ? ''
-                                      : editPrice.text.trim(),
-                                  'normalPrice': editHasSizes
-                                      ? editNormal.text.trim()
-                                      : '',
-                                  'fullPrice':
-                                      editHasSizes ? editFull.text.trim() : '',
-                                  'isAvailable': editAvailable,
-                                  'updatedAt': FieldValue.serverTimestamp(),
-                                });
-
-                                Navigator.pop(context);
-                              },
+                              onTap: editSaving ? null : updateItem,
                             ),
                           ),
                         ],
@@ -410,10 +633,24 @@ class _MenuPageState extends State<MenuPage> {
         );
       },
     );
+
+   
   }
 
   @override
   Widget build(BuildContext context) {
+    if (uid.isEmpty) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF050B16),
+        body: Center(
+          child: Text(
+            'Session expired. Please login again.',
+            style: TextStyle(color: Colors.white),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFF050B16),
       appBar: AppBar(
@@ -439,9 +676,7 @@ class _MenuPageState extends State<MenuPage> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-
                     const SizedBox(height: 18),
-
                     Row(
                       children: [
                         Expanded(
@@ -458,14 +693,13 @@ class _MenuPageState extends State<MenuPage> {
                         ),
                       ],
                     ),
-
                     const SizedBox(height: 18),
-
                     StreamBuilder<QuerySnapshot>(
                       stream: FirebaseFirestore.instance
                           .collection('businesses')
                           .doc(uid)
                           .collection('categories')
+                          .orderBy('createdAt', descending: false)
                           .snapshots(),
                       builder: (context, snapshot) {
                         if (!snapshot.hasData) return const SizedBox();
@@ -511,9 +745,7 @@ class _MenuPageState extends State<MenuPage> {
                         );
                       },
                     ),
-
                     const SizedBox(height: 22),
-
                     if (selectedImage != null)
                       ClipRRect(
                         borderRadius: BorderRadius.circular(20),
@@ -524,9 +756,7 @@ class _MenuPageState extends State<MenuPage> {
                           fit: BoxFit.cover,
                         ),
                       ),
-
                     if (selectedImage != null) const SizedBox(height: 12),
-
                     OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(
                         foregroundColor: const Color(0xFF00D1FF),
@@ -536,63 +766,58 @@ class _MenuPageState extends State<MenuPage> {
                           borderRadius: BorderRadius.circular(18),
                         ),
                       ),
-                      onPressed: pickImage,
+                      onPressed: uploading ? null : pickImage,
                       icon: const Icon(Icons.image),
                       label: const Text('Upload Food Image'),
                     ),
-
                     const SizedBox(height: 18),
-
                     TextField(
                       controller: nameController,
                       style: const TextStyle(color: Color(0xFFEAF8FF)),
                       decoration: inputDecoration('Item Name'),
                     ),
-
                     const SizedBox(height: 14),
-
                     TextField(
                       controller: descController,
                       style: const TextStyle(color: Color(0xFFEAF8FF)),
                       maxLines: 3,
                       decoration: inputDecoration('Description'),
                     ),
-
                     const SizedBox(height: 12),
-
                     neonSwitch(
                       title: 'Normal / Full Prices',
                       value: hasSizes,
-                      onChanged: (v) {
-                        setState(() {
-                          hasSizes = v;
-                        });
-                      },
+                      onChanged: uploading
+                          ? (_) {}
+                          : (v) {
+                              setState(() {
+                                hasSizes = v;
+                              });
+                            },
                     ),
-
                     if (!hasSizes)
                       TextField(
                         controller: priceController,
+                        keyboardType: TextInputType.number,
                         style: const TextStyle(color: Color(0xFFEAF8FF)),
                         decoration: inputDecoration('Price'),
                       ),
-
                     if (hasSizes) ...[
                       TextField(
                         controller: normalController,
+                        keyboardType: TextInputType.number,
                         style: const TextStyle(color: Color(0xFFEAF8FF)),
                         decoration: inputDecoration('Normal Price'),
                       ),
                       const SizedBox(height: 12),
                       TextField(
                         controller: fullController,
+                        keyboardType: TextInputType.number,
                         style: const TextStyle(color: Color(0xFFEAF8FF)),
                         decoration: inputDecoration('Full Price'),
                       ),
                     ],
-
                     const SizedBox(height: 22),
-
                     _FullGradientButton(
                       text: uploading ? 'Uploading...' : 'Add Menu Item',
                       icon: Icons.add,
@@ -873,6 +1098,17 @@ class _MenuItemCard extends StatelessWidget {
                     width: 76,
                     height: 76,
                     fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        width: 76,
+                        height: 76,
+                        color: const Color(0xFF111827),
+                        child: const Icon(
+                          Icons.broken_image,
+                          color: Color(0xFF00D1FF),
+                        ),
+                      );
+                    },
                   )
                 : Container(
                     width: 76,

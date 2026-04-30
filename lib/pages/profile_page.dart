@@ -8,25 +8,19 @@ class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
 
   @override
-  State<ProfilePage> createState() =>
-      _ProfilePageState();
+  State<ProfilePage> createState() => _ProfilePageState();
 }
 
 class _ProfilePageState extends State<ProfilePage> {
-
-  final businessController =
-      TextEditingController();
-
-  final ownerController =
-      TextEditingController();
+  final businessController = TextEditingController();
+  final ownerController = TextEditingController();
 
   bool loading = true;
   bool saving = false;
 
   String email = '';
 
-  String get uid =>
-      FirebaseAuth.instance.currentUser!.uid;
+  String? get currentUid => FirebaseAuth.instance.currentUser?.uid;
 
   @override
   void initState() {
@@ -34,159 +28,180 @@ class _ProfilePageState extends State<ProfilePage> {
     loadProfile();
   }
 
+  @override
+  void dispose() {
+    businessController.dispose();
+    ownerController.dispose();
+    super.dispose();
+  }
+
+  void showMessage(String message, {bool success = false}) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: success ? const Color(0xFF00D4FF) : Colors.redAccent,
+        content: Text(
+          message,
+          style: TextStyle(
+            color: success ? Colors.black : Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> loadProfile() async {
+    final uid = currentUid;
 
-    final doc =
-      await FirebaseFirestore.instance
-        .collection('businesses')
-        .doc(uid)
-        .get();
+    if (uid == null) {
+      if (mounted) {
+        setState(() {
+          loading = false;
+        });
+      }
+      showMessage('Session expired. Please login again.');
+      return;
+    }
 
-    final data = doc.data();
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('businesses')
+          .doc(uid)
+          .get();
 
-    businessController.text =
-        data?['businessName'] ?? '';
+      final data = doc.data();
 
-    ownerController.text =
-        data?['ownerName'] ?? '';
+      businessController.text = data?['businessName'] ?? '';
+      ownerController.text = data?['ownerName'] ?? '';
 
-    email = FirebaseAuth
-            .instance
-            .currentUser
-            ?.email ??
-        '';
-
-    setState(() {
-      loading = false;
-    });
+      email = FirebaseAuth.instance.currentUser?.email ?? '';
+    } catch (e) {
+      showMessage('Failed to load profile.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          loading = false;
+        });
+      }
+    }
   }
 
   Future<void> saveProfile() async {
+    final uid = currentUid;
+
+    if (uid == null) {
+      showMessage('Session expired. Please login again.');
+      return;
+    }
+
+    final businessName = businessController.text.trim();
+    final ownerName = ownerController.text.trim();
+
+    if (businessName.isEmpty) {
+      showMessage('Business name cannot be empty.');
+      return;
+    }
 
     setState(() {
       saving = true;
     });
 
-    await FirebaseFirestore.instance
-        .collection('businesses')
-        .doc(uid)
-        .update({
-      'businessName':
-          businessController.text.trim(),
+    try {
+      await FirebaseFirestore.instance.collection('businesses').doc(uid).update({
+        'businessName': businessName,
+        'ownerName': ownerName,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
 
-      'ownerName':
-          ownerController.text.trim(),
-
-      'updatedAt':
-          FieldValue.serverTimestamp(),
-    });
-
-    setState(() {
-      saving = false;
-    });
-
-    ScaffoldMessenger.of(context)
-      .showSnackBar(
-        const SnackBar(
-          content:
-            Text('Profile Updated'),
-        ),
-      );
+      showMessage('Profile updated.', success: true);
+    } catch (e) {
+      showMessage('Failed to update profile.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          saving = false;
+        });
+      }
+    }
   }
 
   Future<void> resetPassword() async {
+    if (email.trim().isEmpty) {
+      showMessage('Email address not found.');
+      return;
+    }
 
-    await FirebaseAuth.instance
-      .sendPasswordResetEmail(
-        email: email,
+    try {
+      await FirebaseAuth.instance.sendPasswordResetEmail(
+        email: email.trim(),
       );
 
-    ScaffoldMessenger.of(context)
-      .showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Password reset email sent',
-          ),
-        ),
-      );
+      showMessage('Password reset email sent.', success: true);
+    } on FirebaseAuthException catch (e) {
+      showMessage(e.message ?? 'Failed to send password reset email.');
+    } catch (e) {
+      showMessage('Failed to send password reset email.');
+    }
   }
 
   Future<void> logoutUser() async {
-
-    final confirm =
-      await showDialog<bool>(
-        context: context,
-        builder: (_) {
-          return AlertDialog(
-            backgroundColor:
-              const Color(0xFF081222),
-
-            shape: RoundedRectangleBorder(
-              borderRadius:
-                BorderRadius.circular(22),
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF081222),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+          ),
+          title: const Text(
+            "Logout",
+            style: TextStyle(
+              color: Colors.white,
             ),
-
-            title: const Text(
-              "Logout",
-              style: TextStyle(
-                color: Colors.white,
-              ),
+          ),
+          content: const Text(
+            "Are you sure you want to sign out?",
+            style: TextStyle(
+              color: Color(0xFF8AA7C2),
             ),
-
-            content: const Text(
-              "Are you sure you want to sign out?",
-              style: TextStyle(
-                color: Color(0xFF8AA7C2),
-              ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context, false);
+              },
+              child: const Text("Cancel"),
             ),
-
-            actions: [
-
-              TextButton(
-                onPressed: (){
-                  Navigator.pop(
-                    context,
-                    false,
-                  );
-                },
-                child:
-                 const Text("Cancel"),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.redAccent,
               ),
+              onPressed: () {
+                Navigator.pop(context, true);
+              },
+              child: const Text("Logout"),
+            ),
+          ],
+        );
+      },
+    );
 
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor:
-                    Colors.redAccent,
-                ),
-                onPressed: (){
-                  Navigator.pop(
-                    context,
-                    true,
-                  );
-                },
-                child:
-                  const Text("Logout"),
-              ),
-            ],
-          );
-        },
-      );
+    if (confirm == true) {
+      try {
+        await FirebaseAuth.instance.signOut();
 
-    if(confirm == true){
+        if (!mounted) return;
 
-      await FirebaseAuth.instance
-          .signOut();
-
-      if(!mounted) return;
-
-      Navigator.of(context)
-        .pushAndRemoveUntil(
+        Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(
-            builder: (_)
-               => const AuthWrapper(),
+            builder: (_) => const AuthWrapper(),
           ),
           (route) => false,
-      );
+        );
+      } catch (e) {
+        showMessage('Failed to logout. Please try again.');
+      }
     }
   }
 
@@ -194,29 +209,20 @@ class _ProfilePageState extends State<ProfilePage> {
     String label,
     IconData icon,
   ) {
-
     return InputDecoration(
       prefixIcon: Icon(
         icon,
-        color:
-         const Color(0xFF00D4FF),
+        color: const Color(0xFF00D4FF),
       ),
-
       labelText: label,
-
       labelStyle: const TextStyle(
         color: Color(0xFF8AA7C2),
       ),
-
       filled: true,
-      fillColor:
-         const Color(0xFF081222),
-
+      fillColor: const Color(0xFF081222),
       border: OutlineInputBorder(
-        borderRadius:
-         BorderRadius.circular(20),
-        borderSide:
-           BorderSide.none,
+        borderRadius: BorderRadius.circular(20),
+        borderSide: BorderSide.none,
       ),
     );
   }
@@ -225,50 +231,33 @@ class _ProfilePageState extends State<ProfilePage> {
     IconData icon,
     String title,
     VoidCallback onTap, {
-    Color iconColor =
-       const Color(0xFF00D4FF),
+    Color iconColor = const Color(0xFF00D4FF),
   }) {
-
     return Container(
-      margin:
-       const EdgeInsets.only(
-         bottom:14,
-       ),
-
+      margin: const EdgeInsets.only(bottom: 14),
       decoration: BoxDecoration(
-        color:
-         const Color(0xFF081222),
-
-        borderRadius:
-         BorderRadius.circular(22),
-
+        color: const Color(0xFF081222),
+        borderRadius: BorderRadius.circular(22),
         border: Border.all(
-          color:
-           const Color(0xFF14375C),
+          color: const Color(0xFF14375C),
         ),
       ),
-
       child: ListTile(
         leading: Icon(
           icon,
           color: iconColor,
         ),
-
         title: Text(
           title,
           style: const TextStyle(
             color: Colors.white,
-            fontWeight:
-               FontWeight.w600,
+            fontWeight: FontWeight.w600,
           ),
         ),
-
         trailing: const Icon(
           Icons.chevron_right,
-          color:
-             Color(0xFF8AA7C2),
+          color: Color(0xFF8AA7C2),
         ),
-
         onTap: onTap,
       ),
     );
@@ -276,288 +265,182 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   Widget build(BuildContext context) {
-
-    if(loading){
+    if (loading) {
       return const Scaffold(
-        backgroundColor:
-         Color(0xFF030712),
+        backgroundColor: Color(0xFF030712),
         body: Center(
-          child:
-           CircularProgressIndicator(
-             color:
-              Color(0xFF00D4FF),
-           ),
+          child: CircularProgressIndicator(
+            color: Color(0xFF00D4FF),
+          ),
         ),
       );
     }
 
     return Scaffold(
-      backgroundColor:
-        const Color(0xFF030712),
-
+      backgroundColor: const Color(0xFF030712),
       appBar: AppBar(
-        backgroundColor:
-           Colors.transparent,
-        elevation:0,
-
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         title: const Text(
           "Account",
           style: TextStyle(
             color: Colors.white,
           ),
         ),
-
-        iconTheme:
-         const IconThemeData(
-            color: Colors.white,
-         ),
+        iconTheme: const IconThemeData(
+          color: Colors.white,
+        ),
       ),
-
       body: SingleChildScrollView(
-        padding:
-         const EdgeInsets.all(20),
-
+        padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-
             Container(
-              padding:
-               const EdgeInsets.all(28),
-
+              padding: const EdgeInsets.all(28),
               decoration: BoxDecoration(
-                gradient:
-                 const LinearGradient(
-                   colors:[
+                gradient: const LinearGradient(
+                  colors: [
                     Color(0xFF071426),
                     Color(0xFF020817),
-                   ],
-                 ),
-
-                borderRadius:
-                  BorderRadius.circular(
-                    30,
-                  ),
-
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(30),
                 border: Border.all(
-                  color:
-                   const Color(0xFF14375C),
+                  color: const Color(0xFF14375C),
                 ),
               ),
-
               child: Column(
                 children: [
-
                   Container(
-                    width:90,
-                    height:90,
-
-                    decoration:
-                     BoxDecoration(
-                      borderRadius:
-                        BorderRadius.circular(
-                           28,
-                        ),
-
-                      boxShadow:[
+                    width: 90,
+                    height: 90,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(28),
+                      boxShadow: [
                         BoxShadow(
-                          color:
-                           const Color(
-                             0xFF00D4FF,
-                           ).withOpacity(.3),
-                          blurRadius:25,
+                          color: const Color(0xFF00D4FF).withOpacity(.3),
+                          blurRadius: 25,
                         )
                       ],
-                     ),
-
+                    ),
                     child: ClipRRect(
-                      borderRadius:
-                        BorderRadius.circular(
-                           28,
-                        ),
+                      borderRadius: BorderRadius.circular(28),
                       child: Image.asset(
                         'assets/images/deeplink_menu.png',
                         fit: BoxFit.cover,
                       ),
                     ),
                   ),
-
-                  const SizedBox(
-                    height:16,
-                  ),
-
+                  const SizedBox(height: 16),
                   Text(
-                    businessController.text,
+                    businessController.text.isEmpty
+                        ? 'Your Business'
+                        : businessController.text,
+                    textAlign: TextAlign.center,
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize:28,
-                      fontWeight:
-                        FontWeight.bold,
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-
-                  const SizedBox(
-                    height:8,
-                  ),
-
+                  const SizedBox(height: 8),
                   Text(
                     email,
                     style: const TextStyle(
-                      color:
-                        Color(0xFF8AA7C2),
+                      color: Color(0xFF8AA7C2),
                     ),
                   ),
-
                 ],
               ),
             ),
-
-            const SizedBox(
-              height:28,
-            ),
-
+            const SizedBox(height: 28),
             Container(
-              padding:
-                const EdgeInsets.all(22),
-
+              padding: const EdgeInsets.all(22),
               decoration: BoxDecoration(
-                color:
-                 const Color(0xFF071426),
-
-                borderRadius:
-                  BorderRadius.circular(
-                    28,
-                  ),
-
+                color: const Color(0xFF071426),
+                borderRadius: BorderRadius.circular(28),
                 border: Border.all(
-                  color:
-                   const Color(0xFF14375C),
+                  color: const Color(0xFF14375C),
                 ),
               ),
-
               child: Column(
                 children: [
-
                   TextField(
-                    controller:
-                      businessController,
-
-                    style:
-                     const TextStyle(
-                       color: Colors.white,
-                     ),
-
-                    decoration:
-                     fieldStyle(
+                    controller: businessController,
+                    enabled: !saving,
+                    style: const TextStyle(
+                      color: Colors.white,
+                    ),
+                    decoration: fieldStyle(
                       'Cafe / Hotel Name',
                       Icons.storefront,
-                     ),
+                    ),
                   ),
-
-                  const SizedBox(
-                    height:18,
-                  ),
-
+                  const SizedBox(height: 18),
                   TextField(
-                    controller:
-                      ownerController,
-
-                    style:
-                     const TextStyle(
+                    controller: ownerController,
+                    enabled: !saving,
+                    style: const TextStyle(
                       color: Colors.white,
-                     ),
-
-                    decoration:
-                      fieldStyle(
-                       'Owner Name',
-                       Icons.person,
-                      ),
+                    ),
+                    decoration: fieldStyle(
+                      'Owner Name',
+                      Icons.person,
+                    ),
                   ),
-
-                  const SizedBox(
-                    height:24,
-                  ),
-
+                  const SizedBox(height: 24),
                   InkWell(
-                    onTap:
-                      saving
-                       ? null
-                       : saveProfile,
-
-                    child: Container(
-                      width:
-                        double.infinity,
-                      height:56,
-
-                      decoration:
-                        BoxDecoration(
-                          borderRadius:
-                           BorderRadius.circular(
-                              18,
-                           ),
-
-                          gradient:
-                           const LinearGradient(
-                            colors:[
+                    onTap: saving ? null : saveProfile,
+                    child: Opacity(
+                      opacity: saving ? 0.6 : 1,
+                      child: Container(
+                        width: double.infinity,
+                        height: 56,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(18),
+                          gradient: const LinearGradient(
+                            colors: [
                               Color(0xFF00E5FF),
                               Color(0xFF0057FF),
                             ],
-                           ),
+                          ),
                         ),
-
-                      child: Center(
-                        child: Text(
-                          saving
-                           ? "Saving..."
-                           : "Save Profile",
-
-                          style:
-                           const TextStyle(
-                             fontWeight:
-                               FontWeight.bold,
-                             color:
-                               Color(0xFF030712),
-                           ),
+                        child: Center(
+                          child: Text(
+                            saving ? "Saving..." : "Save Profile",
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF030712),
+                            ),
+                          ),
                         ),
                       ),
                     ),
                   ),
-
                 ],
               ),
             ),
-
-            const SizedBox(
-              height:28,
-            ),
-
+            const SizedBox(height: 28),
             actionTile(
               Icons.lock_reset,
               "Reset Password",
               resetPassword,
             ),
-
             actionTile(
               Icons.logout,
               "Logout",
               logoutUser,
-              iconColor:
-                 Colors.redAccent,
+              iconColor: Colors.redAccent,
             ),
-
-            const SizedBox(
-              height:20,
-            ),
-
+            const SizedBox(height: 20),
             const Text(
               "POWERED BY DEEPLINK",
               style: TextStyle(
-                color:
-                 Color(0xFF52677A),
-                fontSize:10,
-                letterSpacing:3,
+                color: Color(0xFF52677A),
+                fontSize: 10,
+                letterSpacing: 3,
               ),
             ),
-
           ],
         ),
       ),
